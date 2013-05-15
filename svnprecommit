@@ -1,0 +1,57 @@
+#!/bin/bash
+export PATH='/var/lib/gems/1.8/bin:/bin:/usr/bin:/usr/local/bin'
+export HOME=/
+
+REPOS="$1"
+TXN="$2"
+
+# Make sure that the log message contains some text.
+svnlook log -t "$TXN" "$REPOS" | \
+   grep "[a-zA-Z0-9]" > /dev/null || exit 1
+
+tmpfile=`mktemp`
+
+# Get the *.pp and *.erb files that are being committed
+while read line
+do
+    svnlook cat -t "$TXN" "$REPOS" "$line" > $tmpfile
+    if [ $? -ne 0 ]
+    then
+        echo "Warning: Failed to checkout $line" >&2
+    fi
+
+# Based on what their extension is, assign a syntax check command and error to use
+    extension="${line##*.}"
+    echo $extension > /tmp/ext
+    case "$extension" in
+    pp)
+         command="puppet parser validate $tmpfile 2>/dev/null"
+         error="Puppet"
+    ;;
+
+    erb)
+         command="erb -x -T 0 $tmpfile | ruby -c 2>/dev/null"
+         error="Template"
+    ;;
+    esac
+
+    # Validate the syntax
+    $command
+    if [ $? -ne 0 ]
+    then
+         echo $error syntax error in $line >&2
+         exit 2
+    fi
+done < <(svnlook changed -t "$TXN" "$REPOS" | awk '/^[^D]/ {print $2}' | grep -E "(\.pp$)")
+#done < <(svnlook changed -t "$TXN" "$REPOS" | awk '/^[^D]/ {print $2}' | grep -E "(\.pp$)|(\.erb$)")
+
+res=$?
+rm -f $tmpfile
+if [ $res -ne 0 ]
+then
+    exit $res
+fi
+
+# All checks passed, so allow the commit.
+exit 0
+
